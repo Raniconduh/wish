@@ -23,9 +23,10 @@ size_t str_len(str * s) {
 
 
 char * str_conv(str * s) {
-	fflush(s->f);
 	fclose(s->f);
-	return s->p;
+	char * p = s->p;
+	free(s);
+	return p;
 }
 
 

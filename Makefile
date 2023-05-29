@@ -1,7 +1,8 @@
 .POSIX:
 
 BIN=	wish
-SRC=	src/wish.c src/parse.c src/builtin.c src/str.c
+SRC=	src/wish.c src/parse.c src/builtin.c src/str.c src/io.c \
+    	src/history.c
 OBJ=	${SRC:.c=.o}
 
 CC?=	cc

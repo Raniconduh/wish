@@ -1,6 +1,8 @@
 #ifndef PARSE_H
 #define PARSE_H
 
+#include <stdbool.h>
+
 
 typedef enum {
 	TOK_PIPE,
@@ -35,5 +37,6 @@ typedef struct {
 
 cmd * parse(const char *);
 void destroy_cmd(cmd *);
+bool isnumber(const char *);
 
 #endif /* PARSE_H */

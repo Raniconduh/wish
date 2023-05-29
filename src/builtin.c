@@ -8,6 +8,7 @@
 #include <sys/types.h>
 
 #include "parse.h"
+#include "history.h"
 #include "builtin.h"
 
 #define ARRLEN(a) (sizeof(a)/sizeof(*a))
@@ -15,11 +16,13 @@
 
 int fn_exit(arg*);
 int cd(arg*);
+int fn_history(arg*);
 
 
 static builtin * builtins[] = {
 	&(builtin){"exit", fn_exit, false},
 	&(builtin){"cd", cd, false},
+	&(builtin){"history", fn_history, false},
 };
 
 
@@ -73,5 +76,47 @@ int cd(arg * args) {
 	}
 
 	setenv("PWD", d, 1);
+	return 0;
+}
+
+
+int fn_history(arg * args) {
+	int start = 0;
+	bool nostart = false;
+
+	if (args->next && isnumber(args->next->dat)) {
+		start = strtod(args->next->dat, NULL);
+		if (start == 0 || start >= history.entries || -start >= history.entries)
+			nostart = true;
+	} else {
+		nostart = true;
+	}
+
+	#define HFMTPF(...) printf("[%d] %s\n", i + 1, h->dat);
+	if (nostart) {
+		he * h = history.last;
+		for (int i = 0; h; h = h->prev, i++) {
+			HFMTPF();
+		}
+	} else if (start < 0) {
+		he * h = history.hist;
+		for (int i = 0; i > start; i--) {
+			h = h->next;
+		}
+
+		for (int i = history.entries + start - 1; h->prev; h = h->prev, i++) {
+			HFMTPF()
+		}
+	} else {
+		he * h = history.last;
+		for (int i = 0; i < start - 1; i++) {
+			h = h->prev;
+		}
+
+		for (int i = start - 1; h; h = h->prev, i++) {
+			HFMTPF();
+		}
+	}
+
 	return 0;
 }

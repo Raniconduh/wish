@@ -1,22 +1,24 @@
-#include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <termios.h>
 #include <stdbool.h>
 #include <sys/wait.h>
 
+#include "io.h"
 #include "keys.h"
 #include "parse.h"
+#include "history.h"
 #include "builtin.h"
 
 #define READLINE_BUFFER_LEN 256
 #define TIOS_ATTR (ICANON | ECHO | ISIG)
 
 
-char * argv0;
+static char * argv0;
 
 
 char * readline(void) {
@@ -26,9 +28,11 @@ char * readline(void) {
 	t.c_lflag &= ~TIOS_ATTR;
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
 	
-	char * s = malloc(READLINE_BUFFER_LEN);
+	char * s = malloc(READLINE_BUFFER_LEN + 1);
 	size_t l = 0;
+	size_t maxl = READLINE_BUFFER_LEN;
 
+	int hist_cnt = -1;
 	bool esc = false;
 
 	int c;
@@ -54,7 +58,47 @@ char * readline(void) {
 				int c;
 				switch ((c = getchar())) {
 				case 'A': // keyup
+					{
+					char * ts = history_get(hist_cnt + 1);
+					if (ts == NULL) break;
+
+					free(s);
+					l = strlen(ts);
+					maxl = l + READLINE_BUFFER_LEN;
+					s = malloc(l + READLINE_BUFFER_LEN + 1);
+					strcpy(s, ts);
+					hist_cnt++;
+					}
+
+					clrline();
+					print_prompt();
+					fputs(s, stdout);
+					break;
 				case 'B': // keydown
+					if (hist_cnt == -1) break;
+
+					if (hist_cnt == 0) {
+						s = realloc(s, READLINE_BUFFER_LEN + 1);
+						*s = '\0';
+						l = 0;
+						maxl = READLINE_BUFFER_LEN;
+						hist_cnt--;
+					} else {
+						char * ts = history_get(hist_cnt - 1);
+						if (ts == NULL) break;
+
+						free(s);
+						l = strlen(ts);
+						maxl = l + READLINE_BUFFER_LEN;
+						s = malloc(l + READLINE_BUFFER_LEN + 1);
+						strcpy(s, ts);
+						hist_cnt--;
+					}
+
+					clrline();
+					print_prompt();
+					fputs(s, stdout);
+					break;
 				case 'C': // keyright
 				case 'D': // keyleft
 				case 'F': // end
@@ -70,8 +114,9 @@ char * readline(void) {
 			putchar(c);
 
 			s[l++] = c;
-			if ((l + 1) % READLINE_BUFFER_LEN == 0) {
+			if (l + 1 == maxl) {
 				s = realloc(s, l + READLINE_BUFFER_LEN + 1);
+				maxl += READLINE_BUFFER_LEN;
 			}
 			break;
 		}
@@ -92,6 +137,8 @@ char * readline(void) {
 	putchar('\n');
 
 	s[l] = '\0';
+	// don't remember empty input
+	if (l) history_add(s);
 	return s;
 }
 
@@ -144,13 +191,14 @@ int main(int argc, char ** argv) {
 	argv0 = argv[0];
 
 	while (true) {
-		fputs("> ", stdout);
+		print_prompt();
 
 		char * s = readline();
 		if (!s) exit(0);
 		else if (!*s) continue;
 
 		cmd * com = parse(s);
+		free(s);
 
 /*
 		// TEST CODE
@@ -163,31 +211,17 @@ int main(int argc, char ** argv) {
 		}
 */
 
-		int in_back = -1;
-		int out_back = -1;
-
-		// deal with fd redirection later			
-		if (com->redir_in) {
-			int infd = open(com->redir_in, O_RDONLY);
-			if (infd == -1) {
-				openerror(com->redir_in, errno);
-				destroy_cmd(com);
-				continue;
-			}
-			in_back = dup(STDIN_FILENO);
-			dup2(infd, STDIN_FILENO);
+		// deal with fd redirection later
+		if (redirect_input(com) == -1) {
+			openerror(com->redir_in, errno);
+			destroy_cmd(com);
+			continue;
 		}
 
-		if (com->redir_out) {
-			// rw-r--r--
-			int outfd = open(com->redir_out, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-			if (outfd == -1) {
-				openerror(com->redir_out, errno);
-				destroy_cmd(com);
-				continue;
-			}
-			out_back = dup(STDOUT_FILENO);
-			dup2(outfd, STDOUT_FILENO);
+		if (redirect_output(com) == -1) {
+			openerror(com->redir_out, errno);
+			destroy_cmd(com);
+			continue;
 		}
 
 		builtin * bi = check_builtin(com->args->dat);
@@ -200,6 +234,7 @@ int main(int argc, char ** argv) {
 				// this is automatically freed
 				char ** args = argarr(com->args);
 				if (execvp(args[0], args) < 0) {
+					restore_io();
 					sherror(com, errno);
 				}
 				exit(1);
@@ -211,14 +246,6 @@ int main(int argc, char ** argv) {
 		}
 
 		// restore file descriptor backups
-		if (in_back > -1) {
-			close(STDIN_FILENO);
-			dup2(in_back, STDIN_FILENO);
-		}
-
-		if (out_back > -1) {
-			close(STDOUT_FILENO);
-			dup2(out_back, STDOUT_FILENO);
-		}
+		restore_io();
 	}
 }

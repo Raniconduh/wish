@@ -49,19 +49,6 @@ static arg *  arg_append(arg ** a) {
 }
 
 
-static char * strdupto(const char * start, const char * end) {
-	char * r = malloc(end - start + 1);
-	char * p = r;
-
-	for (const char * sp = start; sp != end; sp++) {
-		*p++ = *sp;
-	}
-
-	*p = '\0';
-	return r;
-}
-
-
 // go to first non-space character
 static size_t seek_start(char ** s) {
 	size_t l = 0;
@@ -87,9 +74,9 @@ token * parse_next_str(const char * s) {
 	bool parse_ss = false;
 	bool parse_ds = false;
 
-	int seen_lt = 0; // <
-	int seen_gt = 0; // >
-	bool seen_bs = false; // \
+	int seen_lt = 0; /* < */
+	int seen_gt = 0; /* > */
+	bool seen_bs = false; /* \ */
 	
 	bool seen_stuff = false;
 
@@ -278,4 +265,19 @@ void destroy_cmd(cmd * com) {
 	if (com->redir_out) free(com->redir_out);
 
 	free(com);
+}
+
+
+bool isnumber(const char * s) {
+	char * p = (char*)s;
+
+	if (!*s) return false;
+
+	if (*p == '-') p++;
+	if (!*p) return false;
+
+	for (; *p; p++) {
+		if (!isdigit(*p)) return false;
+	}
+	return true;
 }
