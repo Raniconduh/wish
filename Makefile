@@ -12,7 +12,7 @@ CFLAGS+= -Iinclude
 all: ${BIN} include/*.h
 
 ${BIN}: ${OBJ}
-	${CC} ${LDFLAGS} ${OBJ} -o $@
+	${CC} ${CFLAGS} ${LDFLAGS} ${OBJ} -o $@
 
 src/.c.o:
 	${CC} -c ${CFLAGS} $<

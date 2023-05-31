@@ -246,6 +246,8 @@ cmd * parse(const char * s) {
 			}
 			break;
 		}
+
+		free(t);
 	}
 
 	com->args = args;

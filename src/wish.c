@@ -177,7 +177,7 @@ void openerror(char * f, int errnum) {
 char ** argarr(arg * args) {
 	size_t cnt = 0;
 	for (arg * a = args; a; a = a->next) cnt++;
-	char ** arr = malloc(sizeof(char*) * cnt + 1);
+	char ** arr = malloc(sizeof(char*) * (cnt + 1));
 	char ** p = arr;
 	for (arg * a = args; a; a = a->next) {
 		*p++ = a->dat;
