@@ -1,5 +1,5 @@
-#ifndef KEYS_H
-#define KEYS_H
+#ifndef KEY_H
+#define KEY_H
 
 enum kbd_key {
 	KEY_CTRL_C = 3,
@@ -9,4 +9,4 @@ enum kbd_key {
 	KEY_DEL = 127,
 };
 
-#endif /* KEYS_H */
+#endif /* KEY_H */

@@ -8,7 +8,7 @@
 #include <sys/wait.h>
 
 #include "io.h"
-#include "keys.h"
+#include "key.h"
 #include "parse.h"
 #include "history.h"
 #include "builtin.h"
