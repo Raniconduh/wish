@@ -2,15 +2,15 @@
 #define HISTORY_H
 
 
-typedef struct _He {
-	struct _He * next;
-	struct _He * prev;
+typedef struct he {
+	struct he * next;
+	struct he * prev;
 
 	char * dat;
 } he;
 
 
-extern struct _History {
+extern struct history {
 	he * hist;
 	he * last;
 

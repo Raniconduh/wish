@@ -13,6 +13,10 @@ static cmd * new_com(void) {
 	com->args = NULL;
 	com->redir_in = NULL;
 	com->redir_out = NULL;
+	com->pipefdr = -1;
+	com->pipefdw = -1;
+	com->closepipe1 = -1;
+	com->closepipe2 = -1;
 	return com;
 }
 
@@ -24,17 +28,7 @@ static arg * new_arg(void) {
 	return a;
 }
 
-
-static token * new_token(void) {
-	token * t = malloc(sizeof(token));
-	t->t_type = TOK_STR;
-	t->dat = NULL;
-	t->skip = 0;
-	return t;
-}
-
-
-static arg *  arg_append(arg ** a) {
+static arg * arg_append(arg ** a) {
 	if (!*a) {
 		*a = new_arg();
 		return *a;
@@ -46,6 +40,42 @@ static arg *  arg_append(arg ** a) {
 
 	l->next = new_arg();
 	return l->next;
+}
+
+
+static pipeline * new_pipeline(void) {
+	pipeline * pl = malloc(sizeof(pipeline));
+	pl->next = NULL;
+	pl->com = NULL;
+	pl->len = 0;
+	return pl;
+}
+
+
+static pipeline * pipeline_append(pipeline ** pl) {
+	if (!*pl) {
+		*pl = new_pipeline();
+		(*pl)->len++;
+		return *pl;
+	}
+
+	(*pl)->len++;
+
+	pipeline * l;
+	for (l = *pl; l->next; l = l->next)
+		;
+
+	l->next = new_pipeline();
+	return l->next;
+}
+
+
+static token * new_token(void) {
+	token * t = malloc(sizeof(token));
+	t->t_type = TOK_NONE;
+	t->dat = NULL;
+	t->skip = 0;
+	return t;
 }
 
 
@@ -151,6 +181,18 @@ token * parse_next_str(const char * s) {
 					seen_gt++;
 				}
 				break;
+			case '|':
+				if (parse_ss || parse_ds) {
+					str_addc(tstr, c);
+				} else if (seen_bs) {
+					str_addc(tstr, c);
+					seen_bs = false;
+				} else {
+					tok->t_type = TOK_PIPE;
+					tok->skip++;
+					done = true;
+				}
+				break;
 			default:
 				str_addc(tstr, c);
 				break;
@@ -197,12 +239,14 @@ token * parse_next_str(const char * s) {
 			free(rets);
 			rets = NULL;
 		}
-	} else if (!retl) { // empty string
-		free(rets);
-		free(tok);
-		tok = NULL;
-	} else {
-		tok->t_type = TOK_STR;
+	} else if (tok->t_type == TOK_NONE) {
+		if (!retl) { // empty string
+			free(rets);
+			free(tok);
+			tok = NULL;
+		} else {
+			tok->t_type = TOK_STR;
+		}
 	}
 
 	if (tok) tok->dat = rets;
@@ -210,48 +254,63 @@ token * parse_next_str(const char * s) {
 }
 
 
-cmd * parse(const char * s) {
+pipeline * parse(const char * s) {
 	char * sp = (char*)s;
 
-	cmd * com = new_com();
-	arg * args = NULL;
+	pipeline * pl = NULL;
 
-	bool waiting_redir_in = false;
-	bool waiting_redir_out = false;
+	bool done = false;
+	while (!done) {
+		cmd * com = new_com();
+		arg * args = NULL;
 
-	token * t;
-	while ((t = parse_next_str(sp))) {
-		sp += t->skip;
+		bool waiting_redir_in = false;
+		bool waiting_redir_out = false;
+		bool seen_pipe = false;
 
-		switch (t->t_type) {
-		case TOK_REDIR_IN:
-			if (t->dat) com->redir_in = t->dat;
-			else waiting_redir_in = true;
-			break;
-		case TOK_REDIR_OUT:
-			if (t->dat) com->redir_out = t->dat;
-			else waiting_redir_out = true;
-			break;
-		case TOK_STR:
-		default:
-			if (waiting_redir_in) {
-				com->redir_in = t->dat;
-				waiting_redir_in = false;
-			} else if (waiting_redir_out) {
-				com->redir_out = t->dat;
-				waiting_redir_out = false;
-			} else {
-				arg * a = arg_append(&args);
-				a->dat = t->dat;
+		token * t;
+		while (!seen_pipe && (t = parse_next_str(sp))) {
+			sp += t->skip;
+
+			switch (t->t_type) {
+			case TOK_REDIR_IN:
+				if (t->dat) com->redir_in = t->dat;
+				else waiting_redir_in = true;
+				break;
+			case TOK_REDIR_OUT:
+				if (t->dat) com->redir_out = t->dat;
+				else waiting_redir_out = true;
+				break;
+			case TOK_PIPE:
+				seen_pipe = true;
+				break;
+			case TOK_STR:
+			default:
+				if (waiting_redir_in) {
+					com->redir_in = t->dat;
+					waiting_redir_in = false;
+				} else if (waiting_redir_out) {
+					com->redir_out = t->dat;
+					waiting_redir_out = false;
+				} else {
+					arg * a = arg_append(&args);
+					a->dat = t->dat;
+				}
+				break;
 			}
-			break;
+
+			free(t);
 		}
 
-		free(t);
+		com->args = args;
+
+		pipeline * l = pipeline_append(&pl);
+		l->com = com;
+
+		if (!t) done = true;
 	}
 
-	com->args = args;
-	return com;
+	return pl;
 }
 
 
@@ -267,6 +326,15 @@ void destroy_cmd(cmd * com) {
 	if (com->redir_out) free(com->redir_out);
 
 	free(com);
+}
+
+
+void destroy_pipeline(pipeline * pl) {
+	for (pipeline * l = pl; l;) {
+		pipeline * next = l->next;
+		free(l);
+		l = next;
+	}
 }
 
 

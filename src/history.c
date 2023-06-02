@@ -6,7 +6,7 @@
 #define MAX_HISTSIZE 64
 
 
-struct _History history = {
+struct history history = {
 	NULL, NULL, 0	
 };
 

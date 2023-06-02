@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <termios.h>
 #include <stdbool.h>
 #include <sys/wait.h>
 
@@ -15,18 +14,16 @@
 #include "builtin.h"
 
 #define READLINE_BUFFER_LEN 256
-#define TIOS_ATTR (ICANON | ECHO | ISIG)
+
+#define PIPE_R(p) (p[0])
+#define PIPE_W(p) (p[1])
 
 
 static char * argv0;
 
 
 char * readline(void) {
-	// let's disable canonical mode
-	struct termios t;
-	tcgetattr(STDIN_FILENO, &t);
-	t.c_lflag &= ~TIOS_ATTR;
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
+	tsetraw();
 	
 	char * s = malloc(READLINE_BUFFER_LEN + 1);
 	size_t l = 0;
@@ -45,6 +42,8 @@ char * readline(void) {
 			l--;
 			break;
 		case KEY_CTRL_D:
+			if (l > 0) break;
+
 			free(s);
 			return NULL;
 		case KEY_CTRL_C:
@@ -125,9 +124,7 @@ char * readline(void) {
 	}
 
 	input_done:
-	// and... reenable it
-	t.c_lflag |= TIOS_ATTR;
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
+	treset();
 
 	if (c == EOF) {
 		free(s);
@@ -187,8 +184,17 @@ char ** argarr(arg * args) {
 }
 
 
+void sigint_handle(int _) {
+	/* do nothing... */
+}
+
+
 int main(int argc, char ** argv) {
 	argv0 = argv[0];
+
+	sigaction(SIGINT, &(struct sigaction){
+			.sa_handler = sigint_handle,
+			.sa_flags = SA_RESTART}, NULL);
 
 	while (true) {
 		print_prompt();
@@ -197,55 +203,79 @@ int main(int argc, char ** argv) {
 		if (!s) exit(0);
 		else if (!*s) continue;
 
-		cmd * com = parse(s);
+		pipeline * pl = parse(s);
 		free(s);
 
-/*
-		// TEST CODE
-		printf("REDIR INPUT: %s\n", com->redir_in);
-		printf("REDIR OUTPUT: %s\n", com->redir_out);
-		puts("ARGS:");
-		int i = 0;
-		for (arg * a = com->args; a; a = a->next, i++) {
-			printf("%d: %s\n", i, a->dat);
-		}
-*/
+		if (pl->len > 1) {
+			// the last pipeline member does not need to create a pipe
+			for (pipeline * l = pl; l->next; l = l->next) {
+				int pfds[2];
+				pipe(pfds);
+				l->com->pipefdw = PIPE_W(pfds);
+				l->next->com->pipefdr = PIPE_R(pfds);
 
-		// deal with fd redirection later
-		if (redirect_input(com) == -1) {
-			openerror(com->redir_in, errno);
-			destroy_cmd(com);
-			continue;
+				l->com->closepipe1 = PIPE_R(pfds);
+				l->next->com->closepipe2 = PIPE_W(pfds);
+			}
 		}
 
-		if (redirect_output(com) == -1) {
-			openerror(com->redir_out, errno);
-			destroy_cmd(com);
-			continue;
-		}
+		for (pipeline * l = pl; l; l = l->next) {
+			cmd * com = l->com;
 
-		builtin * bi = check_builtin(com->args->dat);
-		if (bi && !bi->forkme) {
-			bi->fn(com->args);	
-		} else if (!fork()) {
-			if (bi) {
-				bi->fn(com->args);	
-			} else {
-				// this is automatically freed
-				char ** args = argarr(com->args);
-				if (execvp(args[0], args) < 0) {
-					restore_io();
-					sherror(com, errno);
+			if (redirect_input(com) == -1) {
+				openerror(com->redir_in, errno);
+				destroy_cmd(com);
+				continue;
+			}
+
+			if (redirect_output(com) == -1) {
+				openerror(com->redir_out, errno);
+				destroy_cmd(com);
+				continue;
+			}
+
+			// redirection takes precedence over pipes
+			if (!com->redir_in) pipe_input(com);
+			if (!com->redir_out) pipe_output(com);
+
+			builtin * bi = check_builtin(com->args->dat);
+			if (bi && !bi->forkme) {
+				bi->fn(com->args);
+			} else if (!fork()) {
+				close(com->closepipe1);
+				close(com->closepipe2);
+
+				if (bi) {
+					bi->fn(com->args);
+				} else {
+					// this is automatically freed
+					char ** args = argarr(com->args);
+					execvp(args[0], args);
 				}
+
+				// on error ....
+				int errnum = errno;
+
+				restore_io();
+				sherror(com, errnum);
 				exit(1);
 			}
-		} else {
-			// we can do this concurrently
+
+			// we are in parent proc here
+			close(com->pipefdr);
+			close(com->pipefdw);
+
+			// restore file descriptor backups
+			restore_io();
+
 			destroy_cmd(com);
+		}
+
+		// need to wait for each command in the pipeline
+		for (int i = 0; i < pl->len; i++) {
 			wait(NULL);
 		}
 
-		// restore file descriptor backups
-		restore_io();
+		destroy_pipeline(pl);
 	}
 }
