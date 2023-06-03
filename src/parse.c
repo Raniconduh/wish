@@ -33,15 +33,13 @@ static arg * new_arg(void) {
 static arg * arg_append(arg ** a) {
 	if (!*a) {
 		*a = new_arg();
+		(*a)->last = (*a);
 		return *a;
 	}
 
-	arg * l;
-	for (l = *a; l->next; l = l->next)
-		;
-
-	l->next = new_arg();
-	return l->next;
+	(*a)->last->next = new_arg();
+	(*a)->last = (*a)->last->next;
+	return (*a)->last;
 }
 
 
@@ -58,17 +56,14 @@ static pipeline * pipeline_append(pipeline ** pl) {
 	if (!*pl) {
 		*pl = new_pipeline();
 		(*pl)->len++;
+		(*pl)->last = *pl;
 		return *pl;
 	}
 
 	(*pl)->len++;
-
-	pipeline * l;
-	for (l = *pl; l->next; l = l->next)
-		;
-
-	l->next = new_pipeline();
-	return l->next;
+	(*pl)->last->next = new_pipeline();
+	(*pl)->last = (*pl)->last->next;
+	return (*pl)->last;
 }
 
 
@@ -100,9 +95,8 @@ cvar * cvar_append(cvar ** v) {
 		return *v;
 	}
 
-	cvar * last = (*v)->last;
-	last->next = new_cvar();
-	(*v)->last = last->next;
+	(*v)->last->next = new_cvar();
+	(*v)->last = (*v)->last->next;
 	return (*v)->last;
 }
 

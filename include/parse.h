@@ -28,6 +28,7 @@ typedef struct {
 
 typedef struct arg {
 	struct arg * next;
+	struct arg * last;
 	char * dat;
 } arg;
 
@@ -55,6 +56,7 @@ typedef struct {
 
 typedef struct pipeline {
 	struct pipeline * next;
+	struct pipeline * last;
 	cmd * com;
 	int len;
 } pipeline;
