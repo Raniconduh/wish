@@ -4,8 +4,10 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "parse.h"
 #include "str.h"
+#include "var.h"
+#include "wish.h"
+#include "parse.h"
 
 
 static cmd * new_com(void) {
@@ -75,7 +77,33 @@ static token * new_token(void) {
 	t->t_type = TOK_NONE;
 	t->dat = NULL;
 	t->skip = 0;
+	t->alone = false;
 	return t;
+}
+
+
+cvar * new_cvar(void) {
+	cvar * v = malloc(sizeof(cvar));
+	v->next = NULL;
+	v->last = NULL;
+	v->var = NULL;
+	v->val = NULL;
+	v->env = false;
+	return v;
+}
+
+
+cvar * cvar_append(cvar ** v) {
+	if (!*v) {
+		*v = new_cvar();
+		(*v)->last = (*v);
+		return *v;
+	}
+
+	cvar * last = (*v)->last;
+	last->next = new_cvar();
+	(*v)->last = last->next;
+	return (*v)->last;
 }
 
 
@@ -92,9 +120,13 @@ static size_t seek_start(char ** s) {
 }
 
 
+void parse_error(const char * s) {
+	fprintf(stderr, "%s: %s\n", argv0, s);
+}
+
+
 token * parse_next_str(const char * s) {
 	if (!*s) return NULL;
-
 
 	str * tstr = new_str();
 
@@ -104,6 +136,10 @@ token * parse_next_str(const char * s) {
 	bool parse_ss = false;
 	bool parse_ds = false;
 
+	// used when ${VAR} is given
+	bool parse_vbrack = false;
+	bool parse_var = false;
+
 	int seen_lt = 0; /* < */
 	int seen_gt = 0; /* > */
 	bool seen_bs = false; /* \ */
@@ -111,7 +147,10 @@ token * parse_next_str(const char * s) {
 	bool seen_stuff = false;
 
 	char * p = (char*)s;
-	tok->skip += seek_start(&p);
+	tok->skip = seek_start(&p);
+	if (tok->skip > 0) {
+		tok->alone = true;
+	} else tok->alone = false;
 
 	bool done = false;
 	for (; *p && !done; p++) {
@@ -126,21 +165,24 @@ token * parse_next_str(const char * s) {
 				seen_bs = false;
 			} else if (!seen_stuff) {
 				continue;
-			} else break;
+			} else {
+				tok->skip--;
+				break;
+			}
 		} else {
 			switch (c) {
 			case '\\': /* \ */
 				if (parse_ss) {
-					str_addc(tstr, '\\');
+					goto lex_reg;
 				} else if (seen_bs) {
-					str_addc(tstr, '\\');
 					seen_bs = false;
+					goto lex_reg;
 				} else seen_bs = true;
 				break;
 			case '\'': /* ' */
 				if (seen_bs) {
-					str_addc(tstr, '\'');
 					seen_bs = false;
+					goto lex_reg;
 				} else if (parse_ss) {
 					parse_ss = false;
 				} else {
@@ -149,8 +191,8 @@ token * parse_next_str(const char * s) {
 				break;
 			case '"':
 				if (seen_bs) {
-					str_addc(tstr, '"');
 					seen_bs = false;
+					goto lex_reg;
 				} else if (parse_ds) {
 					parse_ds = false;
 				} else {
@@ -159,10 +201,10 @@ token * parse_next_str(const char * s) {
 				break;
 			case '<':
 				if (parse_ss || parse_ds) {
-					str_addc(tstr, c);
+					goto lex_reg;
 				} else if (seen_bs) {
-					str_addc(tstr, c);
 					seen_bs = false;
+					goto lex_reg;
 				} else if (seen_stuff) {
 					done = true;
 				} else {
@@ -171,10 +213,10 @@ token * parse_next_str(const char * s) {
 				break;
 			case '>':
 				if (parse_ss || parse_ds) {
-					str_addc(tstr, c);
+					goto lex_reg;
 				} else if (seen_bs) {
-					str_addc(tstr, c);
 					seen_bs = false;
+					goto lex_reg;
 				} else if (seen_stuff) {
 					done = true;
 				} else {
@@ -183,18 +225,60 @@ token * parse_next_str(const char * s) {
 				break;
 			case '|':
 				if (parse_ss || parse_ds) {
-					str_addc(tstr, c);
+					goto lex_reg;
 				} else if (seen_bs) {
-					str_addc(tstr, c);
 					seen_bs = false;
-				} else {
+					goto lex_reg;
+				} else if (!seen_stuff) {
 					tok->t_type = TOK_PIPE;
 					tok->skip++;
 					done = true;
+				} else {
+					done = true;
+				}
+				break;
+			case '$':
+				if (parse_ss) {
+					goto lex_reg;
+				} else if (seen_bs) {
+					seen_bs = false;
+					goto lex_reg;
+				} else if (!seen_stuff) {
+					parse_var = true;
+				} else {
+					done = true;
+				}
+				break;
+			case '{':
+				if (!parse_var) goto lex_reg;
+				parse_vbrack = true;
+				break;
+			case '}':
+				if (!parse_vbrack) goto lex_reg;
+				tok->skip++;
+				done = true;
+				break;
+			case '=':
+				if (parse_ss || parse_ds) {
+					goto lex_reg;
+				} else if (seen_bs) {
+					seen_bs = false;
+					goto lex_reg;
+				} else if (seen_stuff && !tok->alone) {
+					done = true;
+					tok->skip++;
+					tok->t_type = TOK_VAREQ;
+				} else {
+					goto lex_reg;
 				}
 				break;
 			default:
-				str_addc(tstr, c);
+			lex_reg:
+				if (parse_var && isspecial(c)) {
+					done = true;
+				} else {
+					str_addc(tstr, c);
+				}
 				break;
 			}
 
@@ -239,6 +323,8 @@ token * parse_next_str(const char * s) {
 			free(rets);
 			rets = NULL;
 		}
+	} else if (parse_var) {
+		tok->t_type = TOK_VAR;
 	} else if (tok->t_type == TOK_NONE) {
 		if (!retl) { // empty string
 			free(rets);
@@ -263,10 +349,19 @@ pipeline * parse(const char * s) {
 	while (!done) {
 		cmd * com = new_com();
 		arg * args = NULL;
+		cvar * vars = NULL;
 
 		bool waiting_redir_in = false;
 		bool waiting_redir_out = false;
 		bool seen_pipe = false;
+		bool seen_eq = false;
+		bool seen_com = false;
+
+		char * vname = NULL;
+
+		arg * prev = NULL;
+		cvar * vprev = NULL;
+		bool prev_is_arg = false;
 
 		token * t;
 		while (!seen_pipe && (t = parse_next_str(sp))) {
@@ -284,17 +379,70 @@ pipeline * parse(const char * s) {
 			case TOK_PIPE:
 				seen_pipe = true;
 				break;
+			case TOK_VAREQ:
+				if (seen_com) goto parse_reg;
+				seen_eq = true;
+				vname = t->dat;
+				break;
+			case TOK_VAR:
+				{
+				char * e = var_expand(t->dat);
+				if (!e || !*e) continue;
+				free(t->dat);
+				t->dat = strdup(e);
+				}
 			case TOK_STR:
 			default:
+			parse_reg:
+				if (seen_eq && t->alone) {
+					cvar * v = cvar_append(&vars);
+					v->var = vname;
+					v->val = strdup("");
+
+					vprev = v;
+					prev_is_arg = false;
+					seen_eq = false;
+				}
+
 				if (waiting_redir_in) {
 					com->redir_in = t->dat;
 					waiting_redir_in = false;
 				} else if (waiting_redir_out) {
 					com->redir_out = t->dat;
 					waiting_redir_out = false;
-				} else {
+				} else if (seen_eq) {
+					char * val = NULL;
+					if (!t->alone) val = t->dat;
+					else val = strdup("");
+					cvar * v = cvar_append(&vars);
+					v->var = vname;
+					v->val = val;
+
+					vprev = v;
+					prev_is_arg = false;
+					seen_eq = false;
+				} else if (!prev || (t->alone && prev_is_arg)) {
+					seen_com = true;
 					arg * a = arg_append(&args);
 					a->dat = t->dat;
+
+					prev = a;
+					prev_is_arg = true;
+				} else if (prev_is_arg) {
+					seen_com = true;
+					char * p = prev->dat;
+					prev->dat = malloc(strlen(prev->dat) + strlen(t->dat) + 1);
+					strcpy(prev->dat, p);
+					strcat(prev->dat, t->dat);
+					free(p);
+					free(t->dat);
+				} else {
+					char * p = vprev->val;
+					vprev->val = malloc(strlen(vprev->val) + strlen(t->dat) + 1);
+					strcpy(vprev->val, p);
+					strcat(vprev->val, t->dat);
+					free(p);
+					free(t->dat);
 				}
 				break;
 			}
@@ -302,7 +450,25 @@ pipeline * parse(const char * s) {
 			free(t);
 		}
 
+		// no value, set to empty
+		if (seen_eq) {
+			cvar * v = cvar_append(&vars);
+			v->var = vname;
+			v->val = strdup("");
+		}
+
 		com->args = args;
+		com->vars = vars;
+
+		if (pl && pl->len && !args && vars) {
+			parse_error("Invalid variable definition");
+			for (cvar * v = vars; v; v = v->next) {
+				free(v->var);
+				free(v->val);
+			}
+			destroy_cmd(com);
+			continue;
+		}
 
 		pipeline * l = pipeline_append(&pl);
 		l->com = com;
@@ -320,6 +486,12 @@ void destroy_cmd(cmd * com) {
 		free(a->dat);
 		free(a);
 		a = next;
+	}
+
+	for (cvar * v = com->vars; v;) {
+		cvar * next = v->next;
+		free(v);
+		v = next;
 	}
 
 	if (com->redir_in) free(com->redir_in);

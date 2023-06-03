@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
+#include "var.h"
+#include "wish.h"
 #include "parse.h"
 #include "history.h"
 #include "builtin.h"
@@ -14,15 +16,21 @@
 #define ARRLEN(a) (sizeof(a)/sizeof(*a))
 
 
+extern char ** environ;
+
 int fn_exit(arg*);
 int cd(arg*);
 int fn_history(arg*);
+int fn_export(arg*);
+int fn_set(arg*);
 
 
 static builtin * builtins[] = {
 	&(builtin){"exit", fn_exit, false},
 	&(builtin){"cd", cd, false},
 	&(builtin){"history", fn_history, false},
+	&(builtin){"export", fn_export, false},
+	&(builtin){"set", fn_set, false},
 };
 
 
@@ -118,5 +126,57 @@ int fn_history(arg * args) {
 		}
 	}
 
+	return 0;
+}
+
+
+static int envcomp(const void * a, const void * b) {
+	return strcmp(*(char**)a, *(char**)b);
+}
+
+
+int fn_export(arg * args) {
+	for (arg * a = args->next; a; a = a->next) {
+		char * vpair[2];
+		var_parse(a->dat, vpair);
+		if (isspecial(*V_NAME(vpair))) {
+			fputs("export: Invalid variable format", stderr);
+		} else {
+			if (!*V_VAL(vpair)) {
+				char * prev = var_expand(V_NAME(vpair));
+				var_set(V_NAME(vpair), strdup(prev), true);
+			} else {
+				var_set(V_NAME(vpair), V_VAL(vpair), true);
+			}
+		}
+	}
+
+	// no args given, print env variables
+	// let's waste as much cpu and memory as possible:
+	if (!args->next) {
+		size_t envlen = 0;
+		for (char ** p = environ; *p; p++) envlen++;
+
+		char ** envcopy = malloc(sizeof(char*) * envlen);
+		for (size_t i = 0; i < envlen; i++) {
+			envcopy[i] = strdup(environ[i]);
+		}
+		qsort(envcopy, envlen, sizeof(char*), envcomp);
+		for (size_t i = 0; i < envlen; i++) {
+			printf("export %s\n", envcopy[i]);
+			free(envcopy[i]);
+		}
+		free(envcopy);
+	}
+
+	return 0;
+}
+
+
+int fn_set(arg * args) {
+	var * v;
+	while ((v = var_walk())) {
+		printf("%s=%s\n", v->var, v->val);
+	}
 	return 0;
 }

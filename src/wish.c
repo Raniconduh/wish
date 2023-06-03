@@ -9,6 +9,7 @@
 
 #include "io.h"
 #include "key.h"
+#include "var.h"
 #include "parse.h"
 #include "history.h"
 #include "builtin.h"
@@ -19,7 +20,7 @@
 #define PIPE_W(p) (p[1])
 
 
-static char * argv0;
+char * argv0;
 
 
 char * readline(void) {
@@ -170,6 +171,25 @@ void openerror(char * f, int errnum) {
 }
 
 
+bool isspecial(char c) {
+	switch (c) {
+	case '~': case '!': case '@':
+	case '#': case '$': case '%':
+	case '^': case '&': case '*':
+	case '(': case ')': case '-':
+	case '=': case '+': case '[':
+	case ']': case '{': case '}':
+	case ';': case ':': case '\'':
+	case '"': case '\\': case '|':
+	case ',': case '.': case '/':
+	case '<': case '>': case '?':
+		return true;
+	default:
+		return false;
+	}
+}
+
+
 // return null-terminated array for exec family functions
 char ** argarr(arg * args) {
 	size_t cnt = 0;
@@ -191,6 +211,7 @@ void sigint_handle(int _) {
 
 int main(int argc, char ** argv) {
 	argv0 = argv[0];
+	var_init();
 
 	sigaction(SIGINT, &(struct sigaction){
 			.sa_handler = sigint_handle,
@@ -200,7 +221,7 @@ int main(int argc, char ** argv) {
 		print_prompt();
 
 		char * s = readline();
-		if (!s) exit(0);
+		if (!s) break;
 		else if (!*s) continue;
 
 		pipeline * pl = parse(s);
@@ -217,10 +238,39 @@ int main(int argc, char ** argv) {
 				l->com->closepipe1 = PIPE_R(pfds);
 				l->next->com->closepipe2 = PIPE_W(pfds);
 			}
+		} else if (!pl->com->args) {
+			for (cvar * v = pl->com->vars; v; v = v->next) {
+				var_set(v->var, v->val, false);
+			}
+
+			destroy_cmd(pl->com);
+			destroy_pipeline(pl);
+			continue;
 		}
 
 		for (pipeline * l = pl; l; l = l->next) {
 			cmd * com = l->com;
+
+			cvar * pvars = NULL;
+			cvar * nvars = NULL;
+
+			// these should be exported prior to reaching here
+			for (cvar * v = com->vars; v; v = v->next) {
+				var * o;
+				// store old variables to be restored
+				if ((o = var_get(v->var))) {
+					cvar * p = cvar_append(&pvars);
+					p->var = strdup(v->var);
+					p->val = strdup(v->val);
+					p->env = o->env;
+				} else {
+					cvar * n = cvar_append(&nvars);
+					n->var = strdup(v->var);
+				}
+
+				// don't mess with the var map here
+				setenv(v->var, v->val, true);
+			}
 
 			if (redirect_input(com) == -1) {
 				openerror(com->redir_in, errno);
@@ -268,6 +318,20 @@ int main(int argc, char ** argv) {
 			// restore file descriptor backups
 			restore_io();
 
+			for (cvar * n = nvars; n;) {
+				cvar * next = n->next;
+				unsetenv(n->var);
+				free(n);
+				n = next;
+			}
+
+			for (cvar * p = pvars; p;) {
+				cvar * next = p->next;
+				setenv(p->var, p->val, true);
+				free(p);
+				p = next;
+			}
+
 			destroy_cmd(com);
 		}
 
@@ -278,4 +342,6 @@ int main(int argc, char ** argv) {
 
 		destroy_pipeline(pl);
 	}
+
+	var_destroy();
 }
